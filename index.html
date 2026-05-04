@@ -857,6 +857,7 @@
     <button class="header-btn" id="export-json-btn" onclick="downloadArchitectureJSON()" title="Exportiert Nodes, Edges und Change-Log als JSON">EXPORT DATA</button>
     <button class="header-btn export alt" id="export-arch-btn" onclick="exportFullArchitecture()" title="Generiert komplette arc42-Dokumentation">⊞ EXPORT-ALL-STATES</button>
     <button class="header-btn export" id="export-html-btn" onclick="downloadEditedHTML()" title="Exportiert diese HTML-Datei mit aktuellem Stand">EXPORT HTML</button>
+    <button class="header-btn export alt" id="auto-improve-btn" onclick="openAutoImproveModal()" title="Evaluates one strategic architecture improvement">AUTO-IMPROVE</button>
     <button class="header-btn" id="edit-toggle" onclick="toggleEditMode()">EDIT MODE</button>
     <button class="header-btn export" id="export-btn" onclick="openExportModal()" disabled>
       EXPORT BRIEF<span class="badge" id="change-count" style="display:none">0</span>
@@ -1898,6 +1899,10 @@ window.downloadEditedHTML = function() {
 let modalStep = 'review'; // review | generating | brief
 let generatedBrief = '';
 let validationResult = null;
+const AI_CONFIG = {
+  autoImproveEndpoint: (window.__ARCHITECT_AI_CONFIG && window.__ARCHITECT_AI_CONFIG.autoImproveEndpoint) || '/api/architecture/auto-improve',
+  autoImproveModel: (window.__ARCHITECT_AI_CONFIG && window.__ARCHITECT_AI_CONFIG.autoImproveModel) || 'auto',
+};
 let autoImproveState = {
   generatedForSession: false,
   suggestion: null,
@@ -2200,7 +2205,6 @@ function renderModal() {
         <option value="en">Brief in English</option>
         <option value="de">Brief auf Deutsch</option>
       </select>
-      <button class="modal-btn" onclick="openAutoImproveModal()">AUTO-IMPROVE</button>
       <button class="modal-btn" onclick="closeModal()">CANCEL</button>
       <button class="modal-btn primary" onclick="startBriefGeneration()">GENERATE BRIEF →</button>
     `;
@@ -2326,16 +2330,19 @@ window.openAutoImproveModal = async function() {
 
   modalStep = 'generating';
   renderModal();
+  document.getElementById('modal-overlay').classList.add('visible');
   document.querySelector('.loading-text').textContent = 'EVALUATING AUTO-IMPROVE';
 
   try {
     const lang = document.getElementById('lang-select')?.value || 'en';
     const result = await callAutoImproveLLM(lang);
+    const risks = Array.isArray(result.risks) ? result.risks : [];
+    const mitigations = Array.isArray(result.mitigations) ? result.mitigations : [];
     autoImproveState.suggestion = result;
     autoImproveState.contextBrief = result.devBrief;
     autoImproveState.generatedForSession = true;
     generatedBrief = result.previewMarkdown;
-    validationResult = { issues: result.risks.map(r => `Risk: ${r}`), notes: result.mitigations };
+    validationResult = { issues: risks.map(r => `Risk: ${r}`), notes: mitigations };
     modalStep = 'brief';
     renderModal();
   } catch (err) {
@@ -2352,17 +2359,15 @@ window.openAutoImproveModal = async function() {
 };
 
 async function callAutoImproveLLM(lang) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch(AI_CONFIG.autoImproveEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 2200,
-      system: `You evaluate one high-impact, medium-effort architecture improvement. Respond in JSON with keys: title, rationale, impact, effort, architecture_fit, implementation_plan(array), risks(array), mitigations(array), guardrails(array), devBrief. Language: ${lang === 'de' ? 'German' : 'English'}.`,
-      messages: [{
-        role: 'user',
-        content: `Project metadata:\n${JSON.stringify(PROJECT, null, 2)}\nNodes:\n${JSON.stringify(nodes, null, 2)}\nEdges:\n${JSON.stringify(edges, null, 2)}`
-      }]
+      model: AI_CONFIG.autoImproveModel,
+      language: lang,
+      project: PROJECT,
+      nodes,
+      edges
     })
   });
   if (!response.ok) throw new Error(`API error: ${response.status}`);
