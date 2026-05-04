@@ -60,8 +60,10 @@ The **EXPORT BRIEF** modal provides a 3-step flow:
 3. Export markdown
 
 ### LLM-first with local fallback
-- Primary path: brief generation via LLM (`callLLM`).
-- Fallback path: local deterministic generator (`generateLocalBrief`) if LLM fails.
+- Primary path: brief generation via LLM (`callLLM`) **when an LLM proxy/backend is configured**.
+- Recommended setup: run a small server-side proxy that holds the Anthropic API key and forwards requests from the browser. This avoids exposing secrets in client-side code and avoids the auth/CORS issues that typically occur when calling the provider directly from a static `index.html` page.
+- Fallback path: local deterministic generator (`generateLocalBrief`) if LLM access is unavailable or fails.
+- If you open the app directly in the browser without proxy/backend configuration, expect the local generator to be used in practice.
 
 ### Validation Behavior
 Generated output includes validation metadata:
