@@ -1,6 +1,6 @@
 ---
 name: omni-architecture-brief-engine
-description: creates editable single-file html architecture visualizations and ai-agent-ready markdown dev briefs from software, product, api, workflow, data, or agent architectures. use when users ask to visualize architecture, edit endpoints, redirect flows, modify components, export architecture markdown, generate dev briefs, produce arc42 lite snapshots, or turn architecture changes into precise coding-agent instructions.
+description: creates editable single-file html architecture visualizations, ai-agent-ready markdown dev briefs, and optional live api health overlays from software, product, api, workflow, data, or agent architectures. use when users ask to visualize architecture, edit endpoints, live-check endpoints, color nodes red yellow green by runtime health, redirect flows, modify components, export architecture markdown, generate dev briefs, produce arc42 lite snapshots, or turn architecture changes into precise coding-agent instructions.
 ---
 
 # Omni Architecture Brief Engine
@@ -13,7 +13,8 @@ The skill has four required outputs when applicable:
 1. a normalized architecture model with nodes, edges, flows, endpoints, schemas, notes, constraints, and change log;
 2. a single-file HTML editor that visualizes the architecture and supports targeted editing;
 3. a delta markdown development brief describing exactly what the user edited;
-4. a full architecture markdown snapshot in a stable arc42-lite plus OpenAPI-style structure.
+4. a full architecture markdown snapshot in a stable arc42-lite plus OpenAPI-style structure, including `## 10. Architecture Flows` for service-to-service calls;
+5. when requested, a live API health overlay that marks nodes, endpoint rows, and edges as `red`, `yellow`, `green`, or `unknown`.
 
 ## When to apply
 
@@ -23,6 +24,8 @@ Apply this skill when the user asks for any of the following:
 - change endpoints, reroute API paths, redirect flows, rewrite component boundaries, or adjust dependencies;
 - export edits as markdown, tickets, implementation instructions, or dev briefs;
 - generate full architecture snapshots for AI development agents;
+- run or prepare live API health checks for documented endpoints;
+- mark architecture nodes or endpoints red, yellow, or green based on runtime calls;
 - onboard a coding agent with precise architecture context.
 
 Do not apply it to static diagrams that explicitly require no editing, no export, and no implementation brief.
@@ -35,6 +38,7 @@ Do not apply it to static diagrams that explicitly require no editing, no export
 4. **Export two views.** Separate the delta brief from the full snapshot.
 5. **Make briefs executable.** Write markdown so a coding agent can change exactly the affected component, route, edge, schema, or flow.
 6. **Stay architecture-neutral.** Do not assume a specific domain such as Bazodiac, astrology, SaaS, microservices, or web apps unless the user's context provides it.
+7. **Keep live calls server-mediated.** Do not put secrets or unrestricted arbitrary URL probing into the HTML. Use the health-check server contract in `references/live-api-health-check.md`.
 
 ## Required model shape
 
@@ -80,7 +84,8 @@ For each node, capture:
 - `detail.notes`, `detail.constraints`, `detail.risks`.
 
 For each edge, capture:
-- `from`, `to`, `style`, `label`, `relation`, and optional protocol/data description.
+- `from`, `to`, `style`, `label`, `relation`, and optional protocol/data description;
+- for service-to-service calls, also capture `method`, `path`, `description`, and `critical` when inferable.
 
 Use deterministic IDs and stable ordering. Sort nodes by user-flow order when known, otherwise by dependency layer and then by label.
 
@@ -98,15 +103,26 @@ The HTML must include:
 - editing for node title/subtitle/tags/notes;
 - add/edit/delete for flow steps;
 - add/edit/delete for API routes;
+- optional `CHECK LIVE API` button that calls a server-mediated probe endpoint and applies red/yellow/green status classes;
 - add/edit/delete or reroute for edges;
 - add/delete nodes;
 - local save/load/import/export JSON;
 - export delta dev brief as markdown;
 - export full architecture snapshot as markdown.
 
-Use `references/editor-behavior.md` for exact behavior.
+Use `references/editor-behavior.md` for exact behavior. For live API status overlays, use `references/live-api-health-check.md` and the OpenAPI Action schema in `references/custom-gpt-action-openapi.yaml`.
 
-### 4. Convert edits to a dev brief
+### 4. Add live API health checking when requested
+
+When the user asks to call live APIs, validate endpoints, or color nodes by health:
+1. Generate or preserve endpoint probe metadata in `detail.apis[]`: `method`, `path` or `url`, optional `headers`, `query`, `body`, `expectedStatus`, and `expectedResponse.requiredJsonPaths`.
+2. Keep secrets out of the HTML model. Put tokens, base URLs, and host allowlists on the server.
+3. Use the JavaScript function `callLiveApiHealthCheck(serverUrl, options)` embedded by `scripts/generate_architecture_editor.py`.
+4. Expect the health-check server to expose `POST /probe-architecture` using the contract in `references/custom-gpt-action-openapi.yaml`.
+5. Apply statuses exactly: `red` = functionally broken; `yellow` = reachable but partial request/response/contract problem; `green` = full pass; `unknown` = not checked.
+6. If no server URL exists, return the server properties needed instead of pretending the HTML can securely probe arbitrary APIs alone.
+
+### 5. Convert edits to a dev brief
 
 When edits exist, produce a markdown brief using the contract in `references/export-contracts.md`.
 
@@ -122,7 +138,7 @@ The brief must answer:
 
 Do not write vague instructions such as "update the API". Specify the route, method, component, before/after state, and expected behavior.
 
-### 5. Export full architecture snapshot
+### 6. Export full architecture snapshot
 
 When the user asks for full export, architecture documentation, current state, onboarding context, or `EXPORT-ALL-STATES`, produce the fixed arc42-lite plus OpenAPI-style markdown snapshot:
 
@@ -137,10 +153,18 @@ When the user asks for full export, architecture documentation, current state, o
 9. API Reference
 10. Module Catalogue
 11. Glossary
+12. Architecture Flows
 
-The order is invariant. Preserve it for diffability.
+The rendered markdown heading for the final flow section must be exactly `## 10. Architecture Flows`, even though the internal outline above lists it after the glossary. Preserve this heading for compatibility with downstream healthcheck and flow-testing tools.
 
-### 6. Prepare coding-agent handoff
+The flow section must:
+- include only real service-to-service calls;
+- exclude internal Ollama calls, static file accesses, filesystem reads, UI-only edges, and documentation edges;
+- list `Source`, `Target`, `Method`, `Path`, `Description`, and `Critical` for every flow;
+- sort flows by source, then target, then path;
+- mark critical runtime flows with `Critical: true`.
+
+### 7. Prepare coding-agent handoff
 
 For Codex, Claude Code, Gemini CLI, Cursor, Aider, or another coding agent:
 - include a short task title;
@@ -161,7 +185,8 @@ Return:
 1. `architecture.json` if requested or useful;
 2. generated `.html` file or complete HTML block;
 3. brief usage instructions;
-4. uncertainty notes if assumptions were needed.
+4. live API health-check server requirements if endpoint probing was requested;
+5. uncertainty notes if assumptions were needed.
 
 ### For changed architecture handoff
 
@@ -184,7 +209,7 @@ Return only the fixed snapshot structure from `references/export-contracts.md`, 
 - Make markdown diffable: stable section order, stable table columns, sorted endpoints.
 - Preserve before/after values for every edit.
 - Avoid domain-specific labels unless provided by the user.
-- Do not invent repo paths or test commands. If unknown, write `Unknown - search required` and include likely search terms.
+- Do not invent repo paths, server URLs, credentials, or test commands. If unknown, write `Unknown - search required` and include likely search terms or required deployment properties.
 - Separate facts from assumptions in exports.
 - Prefer Mermaid diagrams in markdown snapshots and SVG/HTML canvas in the editor.
 
