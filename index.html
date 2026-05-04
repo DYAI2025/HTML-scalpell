@@ -857,6 +857,7 @@
     <button class="header-btn" id="export-json-btn" onclick="downloadArchitectureJSON()" title="Exportiert Nodes, Edges und Change-Log als JSON">EXPORT DATA</button>
     <button class="header-btn export alt" id="export-arch-btn" onclick="exportFullArchitecture()" title="Generiert komplette arc42-Dokumentation">⊞ EXPORT-ALL-STATES</button>
     <button class="header-btn export" id="export-html-btn" onclick="downloadEditedHTML()" title="Exportiert diese HTML-Datei mit aktuellem Stand">EXPORT HTML</button>
+    <button class="header-btn export alt" id="auto-improve-btn" onclick="openAutoImproveModal()" title="Evaluates one strategic architecture improvement">AUTO-IMPROVE</button>
     <button class="header-btn" id="edit-toggle" onclick="toggleEditMode()">EDIT MODE</button>
     <button class="header-btn export" id="export-btn" onclick="openExportModal()" disabled>
       EXPORT BRIEF<span class="badge" id="change-count" style="display:none">0</span>
@@ -1898,6 +1899,15 @@ window.downloadEditedHTML = function() {
 let modalStep = 'review'; // review | generating | brief
 let generatedBrief = '';
 let validationResult = null;
+const AI_CONFIG = {
+  autoImproveEndpoint: (window.__ARCHITECT_AI_CONFIG && window.__ARCHITECT_AI_CONFIG.autoImproveEndpoint) || '/api/architecture/auto-improve',
+  autoImproveModel: (window.__ARCHITECT_AI_CONFIG && window.__ARCHITECT_AI_CONFIG.autoImproveModel) || 'auto',
+};
+let autoImproveState = {
+  generatedForSession: false,
+  suggestion: null,
+  contextBrief: null
+};
 
 window.openExportModal = function() {
   if (!changes.length) return;
@@ -2290,7 +2300,7 @@ window.startBriefGeneration = async function() {
   }, 1500);
 
   try {
-    const result = generateLocalBrief(lang);
+    const result = await callLLM(lang);
     generatedBrief = result.markdown;
     validationResult = result.validation;
     clearInterval(subEl);
@@ -2307,6 +2317,91 @@ window.startBriefGeneration = async function() {
     renderModal();
   }
 };
+
+window.openAutoImproveModal = async function() {
+  if (changes.length) {
+    toast('Auto-improve is only available before manual session edits.');
+    return;
+  }
+  if (autoImproveState.generatedForSession) {
+    toast('Auto-improve can only run once per development brief.');
+    return;
+  }
+
+  modalStep = 'generating';
+  renderModal();
+  document.getElementById('modal-overlay').classList.add('visible');
+  document.querySelector('.loading-text').textContent = 'EVALUATING AUTO-IMPROVE';
+
+  try {
+    const lang = document.getElementById('lang-select')?.value || 'en';
+    const result = await callAutoImproveLLM(lang);
+    const risks = Array.isArray(result.risks) ? result.risks : [];
+    const mitigations = Array.isArray(result.mitigations) ? result.mitigations : [];
+    autoImproveState.suggestion = result;
+    autoImproveState.contextBrief = result.devBrief;
+    autoImproveState.generatedForSession = true;
+    generatedBrief = result.previewMarkdown;
+    validationResult = { issues: risks.map(r => `Risk: ${r}`), notes: mitigations };
+    modalStep = 'brief';
+    renderModal();
+  } catch (err) {
+    console.warn('Auto-improve failed:', err);
+    const fallback = generateAutoImproveFallback();
+    autoImproveState.suggestion = fallback;
+    autoImproveState.contextBrief = fallback.devBrief;
+    autoImproveState.generatedForSession = true;
+    generatedBrief = fallback.previewMarkdown;
+    validationResult = { issues: fallback.risks.map(r => `Risk: ${r}`), notes: fallback.mitigations };
+    modalStep = 'brief';
+    renderModal();
+  }
+};
+
+async function callAutoImproveLLM(lang) {
+  const response = await fetch(AI_CONFIG.autoImproveEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: AI_CONFIG.autoImproveModel,
+      language: lang,
+      project: PROJECT,
+      nodes,
+      edges
+    })
+  });
+  if (!response.ok) throw new Error(`API error: ${response.status}`);
+  const data = await response.json();
+  const txt = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+  const parsed = JSON.parse(txt);
+  parsed.previewMarkdown = renderAutoImproveMarkdown(parsed);
+  return parsed;
+}
+
+function generateAutoImproveFallback() {
+  const result = {
+    title: 'Introduce architecture consistency checks before brief export',
+    rationale: 'The editor captures rich architecture data but has no automatic contradiction guard.',
+    impact: 'Reduces invalid implementation briefs and prevents divergent architecture decisions.',
+    effort: 'Medium',
+    architecture_fit: 'Uses existing change tracking and brief generation pipeline.',
+    implementation_plan: [
+      'Add a rule engine that validates API-flow-node consistency.',
+      'Gate dev-brief generation on unresolved high-severity contradictions.',
+      'Attach accepted auto-improve suggestion as context to future briefs.'
+    ],
+    risks: ['Overly strict validation can block productive drafting.'],
+    mitigations: ['Introduce severity levels and allow explicit reviewer override with audit note.'],
+    guardrails: ['Only available when no manual session changes exist.', 'One auto-improve per brief session.'],
+    devBrief: 'Implement a consistency validation stage with severity scoring and contradiction reporting.'
+  };
+  result.previewMarkdown = renderAutoImproveMarkdown(result);
+  return result;
+}
+
+function renderAutoImproveMarkdown(s) {
+  return `# Auto-Improve Suggestion — ${s.title}\n\n## Why this improvement\n${s.rationale}\n\n## Impact vs Effort\n- Impact: ${s.impact}\n- Effort: ${s.effort}\n- Fit: ${s.architecture_fit}\n\n## Implementation Plan\n${(s.implementation_plan||[]).map((x,i)=>`${i+1}. ${x}`).join('\n')}\n\n## Risks\n${(s.risks||[]).map(r=>`- ${r}`).join('\n')}\n\n## Mitigations\n${(s.mitigations||[]).map(r=>`- ${r}`).join('\n')}\n\n## Guardrails\n${(s.guardrails||[]).map(r=>`- ${r}`).join('\n')}\n\n## Dev Brief Payload\n${s.devBrief}\n`;
+}
 
 async function callLLM(lang) {
   const projectContext = {
